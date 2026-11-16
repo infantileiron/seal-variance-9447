@@ -6,6 +6,7 @@ x-app: &app
     REDIS_URL: redis://redis:6379/0
     JWT_SECRET: ${JWT_SECRET:-seal-local-development-change-before-sharing-2026}
     SEED_DEMO: ${SEED_DEMO:-true}
+    MERGE_BATCH_SIZE: ${MERGE_BATCH_SIZE:-50}
   volumes:
     - reports:/app/artifacts
   depends_on:

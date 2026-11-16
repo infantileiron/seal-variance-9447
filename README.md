@@ -11,9 +11,10 @@
 ## 业务模块
 
 1. **方案库**：维护方案编号、封口温度、保压时间、压力、材料说明；支持修订。
-2. **拉力录入**：按方案与材料批次登记最大拉力，支持筛选、异常标记与修订；标记样本保留在统计中。
-3. **方差分析**：选择至少两个方案与材料批次，后台 worker 计算 SS、F、p、η²；每次提交冻结参数和测量快照。
-4. **工艺评议**：查看组别均值/标准差，填写推荐方案和至少20字业务理由，负责人签核后冻结，下载 JSON，负责人可查看操作审计。
+2. **工艺归并**：同一工艺重复建档时在线归并：预览参数差异与样本影响，确认后旧编号成为别名，新收样自动归入目标，历史样本由 worker 分批迁移并核对数量。
+3. **拉力录入**：按方案与材料批次登记最大拉力，支持筛选、异常标记与修订；标记样本保留在统计中。
+4. **方差分析**：选择至少两个方案与材料批次，后台 worker 计算 SS、F、p、η²；每次提交冻结参数和测量快照。
+5. **工艺评议**：查看组别均值/标准差，填写推荐方案和至少20字业务理由，负责人签核后冻结，下载 JSON，负责人可查看操作审计。
 
 ### 角色与账号
 
@@ -48,6 +49,7 @@ Docker 默认网络池不足时使用独立可配置子网，默认 `10.253.105.
 | POSTGRES_PASSWORD | seal_local_pass，数据库凭据 |
 | JWT_SECRET | 示例本地 JWT 签名密钥，可在 .env 替换 |
 | SEED_DEMO | true，启动时执行幂等 seed；失败记日志而不阻塞服务 |
+| MERGE_BATCH_SIZE | 50，worker 每轮迁移的历史样本批大小 |
 | NETWORK_SUBNET | 10.253.105.0/24 |
 
 ## 技术与本地开发
@@ -59,7 +61,7 @@ Docker 默认网络池不足时使用独立可配置子网，默认 `10.253.105.
 | 计算 | SciPy 1.14.1 F 分布尾概率；其余方差分解由 Python 实算 |
 | 队列/数据 | Redis 7、PostgreSQL 16 |
 
-前端无构建步骤。后端可在 `backend/` 创建虚拟环境并安装 `requirements.txt`，设置 `DATABASE_URL`、`REDIS_URL`、`JWT_SECRET` 后运行 `uvicorn src.main:app --reload`，另开终端 `python -m src.worker`。开发时前端请求 `/api/`，Nginx 去掉此代理前缀；直接访问后端时路由不带 `/api`。数据库启动时由 SQLAlchemy 建表，`backend/migrations/001_initial.sql` 提供同等初始 DDL。
+前端无构建步骤。后端可在 `backend/` 创建虚拟环境并安装 `requirements.txt`，设置 `DATABASE_URL`、`REDIS_URL`、`JWT_SECRET` 后运行 `uvicorn src.main:app --reload`，另开终端 `python -m src.worker`。开发时前端请求 `/api/`，Nginx 去掉此代理前缀；直接访问后端时路由不带 `/api`。数据库启动时由 SQLAlchemy 建表，`backend/migrations/001_initial.sql` 提供同等初始 DDL，`002_process_merge.sql` 为既有库补充归并字段与归并表。
 
 ## 算法口径与失败态
 
@@ -76,6 +78,19 @@ Docker 默认网络池不足时使用独立可配置子网，默认 `10.253.105.
 组内方差为零（SS_within ≤ 1e−12）时明确失败，避免无穷 F 进入 JSON。所有标记异常的样本仍纳入；修订测量只影响新任务。结果保存组别 n、均值、样本标准差、最小/最大、异常标记数、所有平方和/自由度/均方与输入 SHA-256。
 
 假设为独立样本、组内近似正态和方差齐性；本版不执行正态/方差齐性自动检验或事后多重比较，因此整体显著不说明具体哪两组不同。推荐需人工考虑产品下限、外观、热损伤与能耗，并安排验证。只有本次比较中的工艺可被推荐。签核需先有完整推荐；签核后评议不可覆盖，新建任务留痕。
+
+## 工艺归并口径
+
+同一封合工艺以不同编号建档时，在方案库“工艺归并”区操作，无需停机：
+
+- **预览**：并排展示源/目标温度、保压、压力差异与样本影响（源待迁数、目标现数、归并后合计、异常标记数），只读不改数据；目标本身是别名时提示并落到最终工艺。
+- **确认归并**：旧编号立即成为别名（`processes.merged_into_id`），此后新收样与样本修订按别名自动归入最终工艺；别名编号冻结不可再修订参数。旧评议的冻结快照与结果保留原依据，不受归并影响。
+- **分批迁移**：worker 每轮迁移一批（默认 50 条，`MERGE_BATCH_SIZE` 可调）历史样本到归并链最终工艺；中断（含 kill）后从源编号剩余处继续，同次归并重试不会重复移动；源编号清零且迁出数与建档时快照数核对一致才记 `completed`，不一致记 `failed` 并可从失败处重试。
+- **归并链与循环**：A→B 后可再 B→C，A 的收样与样本最终落到 C；任何使链成环的归并（含反向归并争抢）在创建时被拒绝，并发提交同一对或反向归并时恰好一个成功。
+- **并发口径**：归并创建、收样重定向、参数修订、评议快照共用一把 Postgres 事务级顾问锁，保证并发收样不丢样、不混用归并前后分组；评议同时选中源与目标时按一个工艺分析（快照组合并该最终工艺下全部编号的样本），归并后为同一工艺则拒绝提交。
+- **追踪**：方案库页实时展示每次归并的进度（已迁/应迁/源剩余）、状态与操作人；失败可重试。样本台账中尚未迁走的源编号样本标注“迁移中”。
+
+归并相关接口：`POST /merges/preview` 预览、`POST /merges` 发起、`GET /merges` 追踪、`POST /merges/{id}/retry` 失败重试；发起与重试需工程师或负责人角色。
 
 ## Seed 与一天的工作剧本
 
@@ -103,10 +118,10 @@ Docker 默认网络池不足时使用独立可配置子网，默认 `10.253.105.
 frontend/src/  api / stores / types / components/common / hooks / pages / router / utils / constants
 backend/src/   routes / controllers / services / models / schemas / middlewares / utils / constants / config
 backend/scripts/seed_demo.py
-backend/migrations/001_initial.sql
+backend/migrations/001_initial.sql / 002_process_merge.sql
 ```
 
-共享枚举为 ROLES 与 TASK_STATUS/STATUS：后端 `src/constants/enums.py`，认证判断在 `src/utils/security.py`，状态在 `src/services/assessments.py` 与 `src/worker.py`；前端 `src/constants/enums.js`、`src/components/common/status.js`、`src/app.js`。角色枚举 admin/analyst/viewer；任务状态 queued/running/completed/failed，另有 approved 布尔业务状态。
+共享枚举为 ROLES 与 TASK_STATUS/STATUS、MERGE_STATUS：后端 `src/constants/enums.py`，认证判断在 `src/utils/security.py`，状态在 `src/services/assessments.py`、`src/services/merges.py` 与 `src/worker.py`；前端 `src/constants/enums.js`、`src/components/common/status.js`、`src/app.js`。角色枚举 admin/analyst/viewer；任务状态 queued/running/completed/failed，另有 approved 布尔业务状态；归并状态 migrating/completed/failed。
 
 ## 已知范围
 

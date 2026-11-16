@@ -23,3 +23,6 @@ class AssessmentInput(BaseModel):
 class RecommendationInput(BaseModel):
     selected_process_id:int=Field(gt=0)
     recommendation:str=Field(min_length=20,max_length=3000)
+class MergeInput(BaseModel):
+    source_id:int=Field(gt=0)
+    target_id:int=Field(gt=0)

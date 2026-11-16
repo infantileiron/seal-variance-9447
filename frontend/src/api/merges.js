@@ -1,0 +1,1 @@
+import{request,post}from'./client.js';export const list=()=>request('/merges');export const preview=data=>post('/merges/preview',data);export const create=data=>post('/merges',data);export const retry=id=>post('/merges/'+id+'/retry',{});

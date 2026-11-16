@@ -16,6 +16,7 @@ class Process(Base):
     dwell:Mapped[float]=mapped_column(Float)
     pressure:Mapped[float]=mapped_column(Float)
     note:Mapped[str]=mapped_column(Text,default='')
+    merged_into_id:Mapped[int|None]=mapped_column(ForeignKey('processes.id'),nullable=True)
 class Sample(Base):
     __tablename__='samples'
     id:Mapped[int]=mapped_column(primary_key=True)
@@ -39,6 +40,20 @@ class Assessment(Base):
     approved:Mapped[bool]=mapped_column(Boolean,default=False)
     approved_by:Mapped[str]=mapped_column(String(120),default='')
     created_at:Mapped[str]=mapped_column(String(40))
+class ProcessMerge(Base):
+    __tablename__='process_merges'
+    id:Mapped[int]=mapped_column(primary_key=True)
+    source_id:Mapped[int]=mapped_column(ForeignKey('processes.id'))
+    target_id:Mapped[int]=mapped_column(ForeignKey('processes.id'))
+    status:Mapped[str]=mapped_column(String(20),default='migrating')
+    expected_total:Mapped[int]=mapped_column(Integer,default=0)
+    moved:Mapped[int]=mapped_column(Integer,default=0)
+    batch_size:Mapped[int]=mapped_column(Integer,default=50)
+    actor:Mapped[str]=mapped_column(String(120),default='')
+    error:Mapped[str]=mapped_column(Text,default='')
+    created_at:Mapped[str]=mapped_column(String(40))
+    updated_at:Mapped[str]=mapped_column(String(40))
+    finished_at:Mapped[str]=mapped_column(String(40),default='')
 class Audit(Base):
     __tablename__='audit_logs'
     id:Mapped[int]=mapped_column(primary_key=True)

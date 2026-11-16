@@ -12,7 +12,7 @@ def anova(snapshot):
         values=[s['force'] for s in g['samples']];mean=sum(values)/len(values)
         ss=sum((v-mean)**2 for v in values)
         between+=len(values)*(mean-grand)**2;within+=ss
-        summaries.append({'id':g['id'],'code':g['code'],'name':g['name'],'n':len(values),'mean':mean,'sd':math.sqrt(ss/(len(values)-1)),'min':min(values),'max':max(values),'flagged':sum(s['flagged'] for s in g['samples'])})
+        summaries.append({'id':g['id'],'code':g['code'],'name':g['name'],'aliases':g.get('aliases',[]),'n':len(values),'mean':mean,'sd':math.sqrt(ss/(len(values)-1)),'min':min(values),'max':max(values),'flagged':sum(s['flagged'] for s in g['samples'])})
     if within<=1e-12:raise ValueError('组内方差为零，F检验不成立；补充有实际测量差异的独立样本')
     df_between=k-1;df_within=n-k
     ms_between=between/df_between;ms_within=within/df_within

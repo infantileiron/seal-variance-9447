@@ -4,6 +4,7 @@ from sqlalchemy import select
 from fastapi import HTTPException
 import redis
 from src.models.entities import Assessment,Process,Sample
+from src.services import merges
 queue=redis.Redis.from_url(os.environ['REDIS_URL'])
 def listing(db):return db.scalars(select(Assessment).order_by(Assessment.id.desc())).all()
 def get(db,id):
@@ -12,14 +13,25 @@ def get(db,id):
     return item
 def snapshot_for(db,ids,lot):
     if len(ids)!=len(set(ids)):raise HTTPException(422,'不能重复选择同一工艺')
-    groups=[]
+    # 与归并创建互斥，快照读取一致的归并链状态
+    merges.lock_merge_state(db)
+    canonical_ids=[]
     for id in ids:
-        process=db.get(Process,id)
-        if not process:raise HTTPException(404,'工艺方案不存在')
-        q=select(Sample).where(Sample.process_id==id).order_by(Sample.code)
+        if not db.get(Process,id):raise HTTPException(404,'工艺方案不存在')
+        canonical=merges.canonical_of(db,id)
+        # 源与目标同时入选按一个工艺分析：归并链解析后去重
+        if canonical.id not in canonical_ids:canonical_ids.append(canonical.id)
+    if len(canonical_ids)<2:raise HTTPException(422,'所选工艺归并后为同一工艺，请再选择至少一种其他工艺')
+    groups=[]
+    for cid in canonical_ids:
+        process=db.get(Process,cid)
+        member_ids=merges.group_process_ids(db,cid)
+        # 归并迁移期间，源编号上尚未迁走的样本与目标编号样本同属一组，不混用归并前后分组
+        q=select(Sample).where(Sample.process_id.in_(member_ids)).order_by(Sample.code)
         if lot!='全部':q=q.where(Sample.lot==lot)
         samples=db.scalars(q).all()
-        groups.append({'id':id,'code':process.code,'name':process.name,'temperature':process.temperature,'dwell':process.dwell,'pressure':process.pressure,'samples':[{'code':s.code,'force':s.force,'flagged':s.flagged,'lot':s.lot} for s in samples]})
+        aliases=sorted(db.get(Process,mid).code for mid in member_ids if mid!=cid)
+        groups.append({'id':cid,'code':process.code,'name':process.name,'temperature':process.temperature,'dwell':process.dwell,'pressure':process.pressure,'aliases':aliases,'samples':[{'code':s.code,'force':s.force,'flagged':s.flagged,'lot':s.lot} for s in samples]})
     return {'lot':lot,'groups':groups}
 def create(db,data):
     if len(db.scalars(select(Assessment).where(Assessment.status.in_(['queued','running']))).all())>=10:raise HTTPException(429,'最多10个待执行任务，请稍后重试')
